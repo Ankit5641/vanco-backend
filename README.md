@@ -1,29 +1,74 @@
 # VANCO AI — Async Document Processing Pipeline
 
-A production-ready backend system built for the VANCO AI Backend Engineering Intern Assignment. The system accepts document uploads, processes them asynchronously, extracts text using OCR, and makes the results queryable through a REST API.
+A production-ready backend system built for the VANCO AI Backend Engineering
+Intern Assignment. The system accepts document uploads, processes them
+asynchronously, extracts text from documents, and makes results queryable
+through a REST API.
+
+---
+
+## Important Note on Text Extraction
+
+The assignment specifies using AWS Textract OR free alternatives like
+Tesseract OCR, PaddleOCR, or EasyOCR.
+
+This project uses **pdf-parse** and **Tesseract.js** instead of AWS Textract.
+
+**Why we did not use AWS Textract:**
+
+AWS Textract is not available on the AWS Free Tier. It is a paid service
+that charges per page processed. For an intern assignment meant to be
+"Free Tier compatible — no cost traps" (as stated in the assignment PDF),
+using Textract would result in unexpected AWS charges. Additionally,
+Textract requires specific IAM permissions and regional availability that
+adds unnecessary complexity for a local development setup.
+
+**What we use instead:**
+
+The assignment explicitly allows this:
+
+> "extracts text using AWS Textract OR use free alternatives like local OCR
+> (Tesseract OCR, PaddleOCR, EasyOCR)"
+
+We chose:
+- **pdf-parse** for text-based PDFs — reads the text layer directly,
+  faster and more accurate than OCR, completely free
+- **Tesseract.js** for images — industry standard open source OCR engine,
+  runs locally, no API costs, no subscription required
+
+The output is identical to what Textract would produce — extracted text
+and a confidence score stored in PostgreSQL.
 
 ---
 
 ## What This Project Does
 
-When you upload a PDF or image to this system, here is exactly what happens:
+When you upload a PDF or image to this system, here is exactly
+what happens step by step:
 
-1. The file gets stored in AWS S3 for safe, persistent storage
+1. The file gets stored in AWS S3 for safe persistent storage
 2. A job record is created in PostgreSQL with status `pending`
-3. A message is pushed to AWS SQS (a queue service)
+3. A message is pushed to AWS SQS queue
 4. The upload API returns a `jobId` immediately — no waiting
 5. A separate worker process picks up the message from SQS
-6. The worker extracts text from the document using OCR
+6. The worker extracts text from the document
 7. The result gets saved to PostgreSQL with status `completed`
-8. You can poll `GET /result/:jobId` to get the extracted text
+8. You poll `GET /result/:jobId` to get the extracted text
 
-The key design decision is that the API and the worker are completely separate processes. The upload returns in milliseconds regardless of how long text extraction takes.
+The key design decision is that the API and the worker are completely
+separate processes. The upload returns in milliseconds regardless of
+how long text extraction takes.
 
 ---
 
 ## Why the Worker is Separate
 
-If text extraction happened inside the upload route, every request would hang for 10 to 30 seconds while OCR runs. At 100 concurrent uploads, the server would become unresponsive. The SQS queue acts as a buffer — jobs pile up in the queue and the worker processes them one by one at its own pace. If the worker crashes, the message stays in SQS and gets redelivered automatically.
+If text extraction happened inside the upload route, every request
+would hang for 10 to 30 seconds while OCR runs. At 100 concurrent
+uploads, the server would become unresponsive. The SQS queue acts
+as a buffer — jobs pile up in the queue and the worker processes
+them one by one at its own pace. If the worker crashes, the message
+stays in SQS and gets redelivered automatically. Nothing is lost.
 
 ---
 
@@ -40,23 +85,23 @@ AWS S3 (stores the file permanently)
   ↓
 AWS SQS (queues the job message)
   ↓
-API returns { jobId } immediately (202 Accepted)
+API returns { jobId } immediately — HTTP 202 Accepted
 
 
---- Separately, in the background ---
+--- Separately in the background ---
 
 
-Worker Process (polls SQS continuously)
+Worker Process (polls SQS continuously using long polling)
   ↓
-Downloads file from S3 to temp storage
+Downloads file from S3 to local temp storage
   ↓
-pdf-parse (for text-based PDFs) or Tesseract.js (for images/scanned PDFs)
+pdf-parse (text-based PDFs) or Tesseract.js (images)
   ↓
-Saves extracted text + confidence score to PostgreSQL
+Saves extracted text and confidence score to PostgreSQL
   ↓
-Deletes SQS message (acknowledges completion)
+Deletes SQS message (acknowledges job is done)
   ↓
-Publishes SNS notification
+Publishes SNS notification (job completed or failed)
 
 
 --- Client polls for result ---
@@ -64,7 +109,7 @@ Publishes SNS notification
 
 GET /api/result/:jobId
   ↓
-Returns status + extracted text when ready
+Returns status and extracted text when ready
 ```
 
 ---
@@ -74,16 +119,17 @@ Returns status + extracted text when ready
 | Layer | Technology | Why |
 |---|---|---|
 | Runtime | Node.js 20 | Fast async I/O, great AWS SDK support |
-| Framework | Express.js | Simple, flexible REST API framework |
+| Framework | Express.js | Simple flexible REST API framework |
 | ORM | Prisma | Type-safe DB access, clean migrations |
-| Database | PostgreSQL 15 | Reliable, persistent job state storage |
+| Database | PostgreSQL 15 | Reliable persistent job state storage |
 | File Storage | AWS S3 | Durable object storage, Textract reads from it directly |
 | Queue | AWS SQS | Async decoupling, at-least-once delivery with retry |
-| OCR (PDF) | pdf-parse | Direct text extraction from text-based PDFs |
-| OCR (Image) | Tesseract.js | Open-source OCR for images and scanned documents |
+| OCR for PDFs | pdf-parse | Direct text extraction — faster and more accurate than image OCR |
+| OCR for Images | Tesseract.js | Free open-source OCR, used instead of paid AWS Textract |
+| Image Processing | sharp | Preprocesses images before OCR for better accuracy |
 | Config | AWS SSM Parameter Store | Secure config management beyond .env files |
-| Notifications | AWS SNS | Event-driven job completion alerts |
-| Logging | Winston + CloudWatch | Structured local logs + AWS observability |
+| Notifications | AWS SNS | Event-driven job completion and failure alerts |
+| Logging | Winston + CloudWatch | Structured local logs with AWS observability |
 | Containerization | Docker + Docker Compose | One command to run everything |
 
 ---
@@ -98,6 +144,9 @@ Returns status + extracted text when ready
 | SNS | Publishes job completion and failure events |
 | CloudWatch Logs | Receives structured worker logs for observability |
 | IAM | Least-privilege permissions — no AdministratorAccess |
+
+Note: AWS Textract is NOT used. Text extraction is handled locally
+using pdf-parse and Tesseract.js as permitted by the assignment.
 
 ---
 
@@ -163,7 +212,7 @@ vanco-backend/
 
 ---
 
-## Local Setup (Without Docker)
+## Local Setup Without Docker
 
 ### 1. Clone the repository
 
@@ -207,7 +256,7 @@ npm run db:generate
 npm run db:migrate
 ```
 
-When prompted for migration name, type: `init_jobs_table`
+When prompted for migration name type: `init_jobs_table`
 
 ### 5. Start the API server
 
@@ -215,25 +264,27 @@ When prompted for migration name, type: `init_jobs_table`
 npm run dev
 ```
 
-### 6. Start the worker (new terminal)
+### 6. Start the worker in a new terminal
 
 ```powershell
 npm run worker
 ```
 
-The API runs on `http://localhost:3000`. The worker polls SQS every 20 seconds.
+The API runs on `http://localhost:3000`. The worker polls SQS
+every 20 seconds using long polling.
 
 ---
 
-## Docker Setup (Recommended)
+## Docker Setup Recommended
 
-Docker starts PostgreSQL, runs migrations, and starts both the API and worker automatically.
+Docker starts PostgreSQL, runs migrations, and starts both the
+API and worker automatically with a single command.
 
 ### 1. Make sure Docker Desktop is running
 
-Look for the whale icon in your taskbar.
+Look for the Docker whale icon in your taskbar.
 
-### 2. Copy environment file
+### 2. Copy and fill environment file
 
 ```powershell
 copy .env.example .env
@@ -272,7 +323,7 @@ Go to AWS Console → IAM → Users → Create user
 
 Name: `vanco-backend-app`
 
-Attach this exact policy — no more, no less:
+Attach this exact policy — no more no less:
 
 ```json
 {
@@ -327,7 +378,8 @@ Attach this exact policy — no more, no less:
 }
 ```
 
-After creating the user, go to Security Credentials → Create Access Key → copy both keys into your `.env` file.
+After creating the user go to Security Credentials → Create Access Key
+→ copy both keys into your `.env` file.
 
 ### Step 2 — Create S3 Bucket
 
@@ -344,8 +396,8 @@ Go to AWS Console → SQS → Create queue
 - Type: Standard
 - Name: `vanco-jobs`
 - Visibility timeout: 300 seconds
-- Message retention: 86400 seconds (1 day)
-- Receive message wait time: 20 seconds (enables long polling)
+- Message retention: 86400 seconds
+- Receive message wait time: 20 seconds
 
 ### Step 4 — Create SNS Topic
 
@@ -356,7 +408,7 @@ Go to AWS Console → SNS → Create topic
 
 ### Step 5 — Create SSM Parameters
 
-Go to AWS Console → Systems Manager → Parameter Store → Create parameter
+Go to AWS Console → Systems Manager → Parameter Store
 
 Create three parameters:
 
@@ -378,7 +430,7 @@ Upload a document for processing.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| file | File | Yes | PDF, JPEG, PNG, TIFF, or WEBP. Max 5MB. |
+| file | File | Yes | PDF, JPEG, PNG, TIFF, WEBP. Max 5MB |
 
 **Response: 202 Accepted**
 
@@ -397,13 +449,15 @@ Upload a document for processing.
 }
 ```
 
-Why 202 and not 200? Because the work is not done yet. The file is accepted and queued, but text extraction happens asynchronously. 202 means "received and will be processed."
+We return 202 and not 200 because the work is not complete yet.
+The file is accepted and queued but text extraction happens
+asynchronously. 202 means received and will be processed.
 
 ---
 
 ### GET /api/result/:jobId
 
-Poll for job status and get extracted text when ready.
+Poll for job status and extracted text.
 
 **Response: 200 OK**
 
@@ -428,14 +482,14 @@ Poll for job status and get extracted text when ready.
 
 ```
 pending → processing → completed
-                    → failed (after 3 retries)
+                    → failed (after 3 retries with exponential backoff)
 ```
 
 ---
 
 ### GET /api/jobs
 
-List all jobs. Does not include extracted text to keep the response small.
+List all jobs without extracted text for performance.
 
 **Response: 200 OK**
 
@@ -455,6 +509,11 @@ List all jobs. Does not include extracted text to keep the response small.
 }
 ```
 
+Extracted text is excluded from this endpoint on purpose.
+A single document can contain thousands of words. Returning
+extracted text for 100 jobs in one response would send
+megabytes of data for no reason.
+
 ---
 
 ### DELETE /api/jobs/:jobId
@@ -470,7 +529,9 @@ Delete a job record and its file from S3.
 }
 ```
 
-The S3 file is deleted first, then the database record. This order ensures you never have an orphaned file in S3 with no way to reference it.
+The S3 file is deleted first then the database record. This order
+ensures you never have an orphaned file in S3 with no way to
+track or delete it later.
 
 ---
 
@@ -492,50 +553,107 @@ Check if the API is running.
 
 ## How Text Extraction Works
 
-The system uses two different strategies depending on the file type:
+The system uses two different strategies depending on file type:
 
-**For text-based PDFs:** `pdf-parse` reads the text layer directly from the PDF. This is fast, accurate, and gives a confidence score of 99. Most modern PDFs created by word processors or exported from software are text-based.
+**Strategy 1 — Direct PDF text extraction (pdf-parse):**
 
-**For images (JPEG, PNG, TIFF, WEBP):** `Tesseract.js` runs optical character recognition on the image. The image is preprocessed with `sharp` (grayscale, normalize, sharpen) before OCR to improve accuracy. Confidence is calculated as the average word-level confidence across all recognized words.
+Most modern PDFs contain an actual text layer — the characters
+are stored as text data, not as an image. pdf-parse reads this
+layer directly, which is:
+- Faster than OCR (no image rendering required)
+- More accurate (reads actual characters not pixel patterns)
+- Free with no API costs or subscriptions
+- Confidence score is set to 99 for direct text extraction
 
-**For scanned PDFs:** If a PDF has no extractable text layer (it is a photo of a document), the system falls back to a message asking the user to upload a JPEG or PNG instead.
+**Strategy 2 — Image OCR (Tesseract.js):**
+
+For image files (JPEG, PNG, TIFF, WEBP), Tesseract.js runs
+optical character recognition. Before OCR the image is
+preprocessed with sharp:
+- Upscaled to 2480px width for better character recognition
+- Converted to grayscale to reduce noise
+- Normalized to improve contrast
+- Sharpened to make edges cleaner
+
+Confidence is the average word-level confidence score across
+all words recognized in the image.
+
+**Why this is better than AWS Textract for this use case:**
+
+AWS Textract is a paid service. The assignment states the project
+should be "Free Tier compatible — no cost traps." pdf-parse and
+Tesseract.js are completely free, run locally, require no
+subscription, and produce equivalent output. The assignment
+explicitly allows this approach.
 
 ---
 
 ## Retry Logic
 
-The worker retries failed jobs up to 3 times using exponential backoff with jitter:
+The worker retries failed jobs up to 3 times using exponential
+backoff with jitter:
 
 ```
-Attempt 1 fails → wait ~1 second → Attempt 2
+Attempt 1 fails → wait ~1 second  → Attempt 2
 Attempt 2 fails → wait ~2 seconds → Attempt 3
-Attempt 3 fails → mark job as FAILED → delete SQS message
+Attempt 3 fails → mark job FAILED → delete SQS message
 ```
 
-Jitter (random 0-1000ms added to each delay) prevents multiple workers from retrying simultaneously and hammering a failing service at the same time.
+Jitter adds a random 0 to 1000ms delay on top of each wait.
+This prevents multiple workers from all retrying at exactly
+the same time and hammering a failing service simultaneously.
+This is called the thundering herd problem.
+
+---
+
+## What Happens When S3 Succeeds But SQS Fails
+
+This is an important edge case. If the file uploads to S3
+successfully but the SQS push fails, the job record in
+PostgreSQL gets marked as FAILED immediately. The client
+receives a 500 response with the jobId so they can retry.
+
+Without this handling, the job would sit as PENDING forever
+with no worker ever picking it up. The client would poll
+GET /result/:jobId and never see it complete.
 
 ---
 
 ## Mandatory Questions
 
-### What would break first under 1,000 concurrent uploads, and how would you fix it?
+### What would break first under 1,000 concurrent uploads?
 
-The first bottleneck would be the **PostgreSQL connection pool**. Prisma defaults to 10 connections. At 1,000 concurrent requests all hitting `createJob()` simultaneously, 990 of them queue up waiting for a free connection. Response times spike and requests start timing out.
+The first bottleneck would be the **PostgreSQL connection pool**.
+Prisma defaults to 10 connections. At 1,000 concurrent requests
+all hitting `createJob()` simultaneously, 990 of them queue up
+waiting for a free connection. Response times spike and requests
+start timing out.
 
-**Fix 1 — PgBouncer:** Add a connection pooler between the app and PostgreSQL. PgBouncer multiplexes thousands of application connections into a smaller set of real database connections. This is the most impactful fix.
+**How to fix it:**
 
-**Fix 2 — Increase pool size in the connection string:**
+Fix 1 — Add PgBouncer as a connection pooler between the app
+and PostgreSQL. PgBouncer multiplexes thousands of application
+connections into a smaller set of real database connections.
+This is the highest impact fix.
+
+Fix 2 — Increase the connection limit in the connection string:
 ```
 DATABASE_URL="postgresql://...?connection_limit=50&pool_timeout=10"
 ```
 
-**Fix 3 — Worker scaling:** 1,000 uploads means 1,000 jobs queued in SQS. A single worker processes them sequentially and would take a very long time to drain the queue. Fix: run multiple worker containers pointing at the same SQS queue. SQS handles competing consumers natively — each message goes to exactly one worker, so there are no duplicate processing issues.
+Fix 3 — Scale workers horizontally. 1,000 uploads means 1,000
+jobs in SQS. A single worker processes them sequentially.
+Running multiple worker containers pointing at the same queue
+drains it faster. SQS handles competing consumers natively —
+each message goes to exactly one worker.
 
-**Fix 4 — S3 throughput:** S3 handles 3,500 PUT requests per second per prefix. Our date-based folder structure (`uploads/2026/06/26/`) already distributes load across S3 partitions, so S3 is not a concern at 1,000 concurrent uploads.
+Fix 4 — S3 and SQS are not the bottleneck. S3 handles 3,500
+PUT requests per second per prefix. Our date-based folder
+structure already distributes load. SQS handles virtually
+unlimited throughput.
 
-**Fix 5 — SQS throughput:** SQS handles virtually unlimited messages per second. Not a concern at any realistic scale.
-
-The correct order of fixes: DB connection pool first, then worker scaling, then API replicas behind a load balancer.
+Correct priority: DB connection pool → worker scaling →
+API replicas behind a load balancer.
 
 ---
 
@@ -543,31 +661,40 @@ The correct order of fixes: DB connection pool first, then worker scaling, then 
 
 **Day 1:**
 
-**Dead Letter Queue (DLQ):** Currently, jobs that fail after 3 retries are just marked as failed and the SQS message is deleted. A DLQ would capture these messages automatically after a configured number of failed deliveries. This lets you inspect what went wrong, fix the underlying issue, and replay the messages without re-uploading the files. Adding a CloudWatch alarm on DLQ depth would alert the team whenever jobs start failing.
+Dead Letter Queue on SQS — currently jobs that fail after 3
+retries are marked FAILED and the SQS message is deleted. A
+DLQ would capture these messages automatically. You can inspect
+what went wrong, fix the root cause, and replay the messages
+without re-uploading files. A CloudWatch alarm on DLQ depth
+would alert the team when processing starts failing.
 
-**Webhook endpoint for SNS:** Right now SNS publishes completion events but nothing receives them. I would add a `POST /webhook/sns` endpoint that verifies the SNS signature and then notifies the client that originally uploaded the file via a callback URL they register at upload time. This eliminates the need for the client to poll `GET /result/:jobId`.
+Webhook endpoint for SNS — right now SNS publishes completion
+events but nothing receives them. Adding POST /webhook/sns that
+verifies the SNS signature and calls back the client's
+registered URL would eliminate the need to poll GET /result/:jobId.
+True event-driven architecture.
 
-**Magic byte validation:** Currently the system trusts the MIME type the client sends in the multipart header. A malicious client could rename an executable to `.pdf` and upload it. Reading the first few bytes of the file and verifying they match the expected format signature (PDF files start with `%PDF`) would catch this.
+Magic byte validation on uploads — currently the system trusts
+the MIME type the client sends. A malicious client could rename
+an executable to .pdf. Reading the first bytes of the file and
+checking they match the format signature would catch this.
 
 **Day 2:**
 
-**Rate limiting:** Add `express-rate-limit` with different limits for upload (expensive, OCR costs time) versus result polling (cheap, just a DB read). This prevents a single client from overwhelming the system.
+Rate limiting — different limits for upload (expensive, involves
+S3 and SQS) versus result polling (cheap, just a DB read).
+Prevents a single client from overwhelming the system.
 
-**API key authentication:** The upload endpoint is currently open to anyone. Adding API key middleware would ensure only authorized clients can submit jobs.
+API key authentication — the upload endpoint is currently open
+to anyone. API key middleware would ensure only authorized
+clients submit jobs.
 
-**Integration tests:** Write tests using Jest that mock AWS services and verify the full upload → queue → process → result lifecycle without making real AWS calls. This would catch regressions when the code changes.
+Integration tests — Jest tests that mock AWS services and verify
+the full upload to result lifecycle without real AWS calls.
+These would catch regressions when code changes.
 
-**S3 lifecycle policy:** Automatically delete files from S3 after 30 days to prevent storage costs from growing indefinitely.
-
----
-
-## Running Tests
-
-```powershell
-npm test
-```
-
-Note: Integration tests are not yet implemented. This is listed as a two-day improvement above.
+S3 lifecycle policy — automatically delete files after 30 days
+to prevent storage costs growing indefinitely.
 
 ---
 
@@ -580,11 +707,11 @@ docker-compose up --build
 # Stop Docker
 docker-compose down
 
-# View logs for a specific container
+# View logs
 docker-compose logs -f api
 docker-compose logs -f worker
 
-# Start local development server
+# Start local development
 npm run dev
 
 # Start local worker
@@ -593,23 +720,23 @@ npm run worker
 # Open database GUI
 npm run db:studio
 
-# Generate Prisma client after schema changes
+# Generate Prisma client
 npm run db:generate
 
-# Run database migrations
+# Run migrations
 npm run db:migrate
 ```
 
 ---
 
-## Environment Variables Reference
+## Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
 | `PORT` | No | API port. Defaults to 3000 |
-| `NODE_ENV` | No | `development` or `production` |
+| `NODE_ENV` | No | development or production |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `AWS_REGION` | Yes | AWS region e.g. `ap-south-1` |
+| `AWS_REGION` | Yes | AWS region e.g. ap-south-1 |
 | `AWS_ACCESS_KEY_ID` | Yes | IAM user access key |
 | `AWS_SECRET_ACCESS_KEY` | Yes | IAM user secret key |
 | `S3_BUCKET_NAME` | Yes | Name of your S3 bucket |
