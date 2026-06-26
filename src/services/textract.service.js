@@ -1,6 +1,6 @@
 const Tesseract = require('tesseract.js');
+const pdfParse = require('pdf-parse');
 
-const pdfParse = require('pdf-parse/lib/pdf-parse.js');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');

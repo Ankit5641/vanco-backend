@@ -28,7 +28,7 @@
     "express-validator": "^7.0.1",
     "helmet": "^7.1.0",
     "multer": "^1.4.5-lts.1",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse": "^1.1.1",
     "pdf-to-png-converter": "^4.1.1",
     "pdfjs-dist": "^6.0.227",
     "sharp": "^0.35.2",
