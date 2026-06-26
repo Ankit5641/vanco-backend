@@ -1,0 +1,82 @@
+
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: vanco_postgres
+    environment:
+      POSTGRES_DB: vanco_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build: .
+    container_name: vanco_migrate
+    command: npx prisma migrate deploy --schema=src/prisma/schema.prisma
+    user: root
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/vanco_db
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: .
+    container_name: vanco_api
+    command: node src/server.js
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/vanco_db
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build: .
+    container_name: vanco_worker
+    command: node src/worker/worker.js
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/vanco_db
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
